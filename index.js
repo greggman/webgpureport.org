@@ -691,7 +691,7 @@ function adapterOptionsToDesc(requestAdapterOptions, adapter, device) {
   ];
   return parts.length > 0
     ? parts.join(' ')
-    : requestAdapterOptions.powerPreference;
+    : requestAdapterOptions?.powerPreference ?? '';
 }
 
 function getSelectionText(all) {
@@ -833,6 +833,17 @@ function showImplementationStatus() {
   }));
 }
 
+// We don't want the powerPreference or forceFallbackAdapter
+// to affect the id. We only want an adapter to appear if it
+// is actually different. (different limits, different features,
+// different adapterInfo). This is I suppose kind of hacky.
+// Maybe we should compute this rather than using the innerHTML
+// but, that means we need to update to areas of code if one
+// changes.
+function normalizeId(id) {
+  return id.replaceAll(/high-performance|low-power/g, '');
+}
+
 async function main() {
   if (!navigator.gpu?.requestAdapter) {
     log('webgpu is not available on this browser');
@@ -841,6 +852,7 @@ async function main() {
   }
 
   const requestAdapterOptionsSets = [
+    undefined,
     { powerPreference: "high-performance" },
     { powerPreference: "low-power", },
     { powerPreference: "low-power", forceFallbackAdapter: true, },
@@ -849,6 +861,7 @@ async function main() {
   ];
 
   const adapterIds = new Map();
+  let defaultId;
   for (const requestAdapterOptions of requestAdapterOptionsSets) {
     try {
       const adapter = await navigator.gpu.requestAdapter(requestAdapterOptions);
@@ -857,7 +870,8 @@ async function main() {
       // Effectively if the limits are the same then it's *probably* the 
       // same adaptor.
       const elem = await adapterToElements(adapter, device);
-      const id = elem?.innerHTML;
+      const id = normalizeId(elem?.innerHTML);
+      defaultId = defaultId ?? id;
       if (!adapterIds.has(id)) {
         adapterIds.set(id, {
           desc: adapterOptionsToDesc(requestAdapterOptions, adapter, device),
@@ -866,7 +880,7 @@ async function main() {
         });
       }
     } catch (e) {
-      if (!requestAdapterOptions.forceFallbackAdapter) {
+      if (!requestAdapterOptions?.forceFallbackAdapter) {
         log(`  webgpu request with adapterOptions: ${JSON.stringify(requestAdapterOptions)} failed:`, e.message || e);
       }
     }
@@ -888,10 +902,9 @@ async function main() {
       ));
       showImplementationStatus();
   }
-  window.a = adapterIds;
   const sectionsElem = el('div', {className: 'sections'},
     [...actualAdaptersIds].map(([id, {desc, elem}], ndx) => el('div', {className: 'adapter'}, [
-      createHeading('h2', '=', `${adapterIds.size > 1 ? `#${ndx + 1} ` : ''}${(adapterIds.size > 1) ? `${desc}` : ''}`),
+      createHeading('h2', '=', `${adapterIds.size > 1 ? `#${ndx + 1} ` : ''}${(adapterIds.size > 1) ? `${desc}` : ''}${id === defaultId ? ' (default)' : ''}`),
       elem,
     ])));
   addElemToDocument(sectionsElem);
