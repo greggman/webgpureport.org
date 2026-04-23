@@ -603,36 +603,78 @@ async function supportsDirectTextureAttachments(device) {
   const context = canvas.getContext('webgpu');
   const size = [canvas.width, canvas.height];
   const format = navigator.gpu.getPreferredCanvasFormat();
-  context.configure({device, format });
-  const texture = device.createTexture({size, usage: GPUTextureUsage.RENDER_ATTACHMENT, format, sampleCount: 4});
-  const resolveTarget = device.createTexture({size, usage: GPUTextureUsage.RENDER_ATTACHMENT, format });
-  const depthTexture = device.createTexture({size, usage: GPUTextureUsage.RENDER_ATTACHMENT, format: 'depth16unorm', sampleCount: 4 });
+  context.configure({
+    device,
+    format,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+  const canvasTexture = context.getCurrentTexture();
+  const texture = device.createTexture({
+    size,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    format,
+    sampleCount: 4,
+  });
+  const depthTexture = device.createTexture({
+    size,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    format: 'depth16unorm',
+    sampleCount: 4,
+  });
+
   try {
     device.pushErrorScope('validation');
     const encoder = device.createCommandEncoder();
     {
       const pass = encoder.beginRenderPass({
         colorAttachments: [
-          {view: texture, resolveTarget, loadOp: 'clear', storeOp: 'store' },
+          {
+            view: texture,
+            resolveTarget: canvasTexture,
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: [0, 1, 0, 1],
+          },
         ],
-        depthStencilAttachment: { view: depthTexture, depthLoadOp: 'load', depthStoreOp: 'store' },
+        depthStencilAttachment: {
+          view: depthTexture,
+          depthLoadOp: 'load',
+          depthStoreOp: 'store',
+        },
       });
       pass.end();
     }
+    const buffer = device.createBuffer({
+      size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    encoder.copyTextureToBuffer(
+      { texture: canvasTexture },
+      { buffer },
+      [1],
+    );
     // Safari passes the pass above if there as a depthStencilAttachment but
     // fails if there is only a canvas texture.
     {
       const pass = encoder.beginRenderPass({
         colorAttachments: [
-          {view: context.getCurrentTexture(), loadOp: 'clear', storeOp: 'store' },
+          {
+            view: canvasTexture,
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
         ],
       });
       pass.end();
     }
-    encoder.finish();
+    device.queue.submit([encoder.finish()]);
     const err = await device.popErrorScope();
     console.log(err);
     return !err;
+    await buffer.mapAsync(GPUMapMode.READ);
+    const pixel = new Uint8Array(buffer.getMappedRange());
+    if (pixel[0] !== 0 || pixel[1] !== 255 || pixel[2] !== 0 || pixel[3] !== 255) {
+      throw new Error(`unexpected pixel value: ${[...pixel]}`);
+    }
   } catch (e) {
     console.error(e);
     return false;
